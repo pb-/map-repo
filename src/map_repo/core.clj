@@ -62,7 +62,7 @@
 (defn run-command [directory command]
   (apply sh-raise (concat command [:dir directory])))
 
-(defn process-repo [run-id org command repo-name]
+(defn process-repo [run-id org message command repo-name]
   (merge
     {:repo-name repo-name}
     (try
@@ -73,15 +73,30 @@
         (run-command directory command)
         (if (has-changes? directory)
           (do (branch directory branch-name)
-              (commit directory "Automatic commit from map-repo")
+              (commit directory message)
               (push directory branch-name)
-              (response-raise
-                (create-pull
-                  org repo-name "Automatic PR from map-repo" "master" branch-name {:body "Body..."}))
               {:changes? true
-               :success? true})
-          {:changes? false}))
-      (catch Exception e {:success false :message (.getMessage e)}))))
+               :success? true
+               :link (:html_url
+                       (response-raise
+                         (create-pull
+                           org repo-name message "master" branch-name {:body message})))})
+          {:changes? false
+           :success? true}))
+      (catch Exception e {:success? false :message (.getMessage e)}))))
+
+(defn format-results [results]
+  (->> results
+       (sort-by :repo-name)
+       (sort-by :changes?)
+       (sort-by #(not (:success? %)))
+       (map #(str (:repo-name %)
+                  ": "
+                  (cond
+                    (:changes? %) (str  "PR created - " (:link %))
+                    (:success? %) "no changes"
+                    :else (str  "failed: " (:message %)))))
+       (string/join \newline)))
 
 (defn error-msg [errors]
   (str "The following errors occurred while parsing your command:\n\n"
@@ -119,37 +134,20 @@
   (println msg)
   (System/exit status))
 
-(comment
-
-  (format "hey %d" nil)
-
-    (with-defaults {:oauth-token ":trollface:"}
-      (response-raise (r/user-repos "pb-")))
-
-    (with-defaults {:oauth-token ":trollface:"}
-      (process-repo (gen-id) "pb-" "rm README.md" "map-repo"))
-
-    (with-defaults {:oauth-token ":trollface:"}
-      (process-repo (gen-id) "pb-" "ls" "map-repo"))
-
-    (run "123" "asdf" #"^a" "ls")
-
-    (validate-args ["-o" "o" "-p" "p" "-m" "asdf"])
-    (validate-args ["-o" "o" "-p" "p" "-m" "asdf" "some" "command"])
-
-  )
-
 (defn run [run-id org repo-pattern message command]
-  (let [repos (filter-repos (get-repos org) repo-pattern)]
-    (println repos)))
-
-(comment
-  (run (gen-id) "pb-" ".*" "rm README.md"))
+  (let [repos (filter-repos (get-repos org) repo-pattern)
+        results (map (partial process-repo run-id org message command) repos)]
+    (println (format-results results))
+    (shutdown-agents)))
 
 (defn -main [& args]
   (let [{:keys [command options exit-message ok?]} (validate-args args)]
     (if exit-message
       (exit (if ok? 0 1) exit-message)
-      (let [run-id (gen-id)]
-        (println "Run id" run-id)
-        (run run-id (:org options) (:pattern options) (:message options) command)))))
+      (let [token (System/getenv "GITHUB_TOKEN")
+            run-id (gen-id)]
+        (if-not token
+          (exit 1 "Please set the GITHUB_TOKEN environment variable")
+          (with-defaults {:oauth-token token}
+            (println "Run id" run-id)
+            (run run-id (:org options) (:pattern options) (:message options) command)))))))
