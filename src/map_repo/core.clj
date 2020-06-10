@@ -33,7 +33,7 @@
     response))
 
 (defn get-repos [org]
-  (map :name (org-repos org {:all-pages true})))
+  (map :name (response-raise (org-repos org {:all-pages true}))))
 
 (defn filter-repos [repos pattern]
   (filter (partial re-find pattern) repos))
@@ -90,12 +90,12 @@
 (defn usage [options-summary]
   (->> ["Apply a command to a sequence of Github repositories and turn changes into pull requests."
         ""
-        "Usage: map-repo [options] command"
+        "Usage: map-repo [OPTIONS] COMMAND..."
         ""
-        "Options:"
+        "Available OPTIONS:"
         options-summary
         ""
-        "command will be executed in a shell."]
+        "COMMAND... will be executed in a shell."]
        (string/join \newline)))
 
 (defn validate-args [args]
@@ -108,8 +108,9 @@
       errors
       {:exit-message (error-msg errors)}
       ; Extra validation
-      (every? (set (keys options)) [:org :pattern :message])
-      {:action (first arguments) :options options}
+      (and (not-empty arguments)
+           (every? (set (keys options)) [:org :pattern :message]))
+      {:command arguments :options options}
       ; Summary
       :else
       {:exit-message (usage summary)})))
@@ -133,11 +134,12 @@
 
     (run "123" "asdf" #"^a" "ls")
 
-    (validate-args ["-o" "o" "-p" "p" "asdf"])
+    (validate-args ["-o" "o" "-p" "p" "-m" "asdf"])
+    (validate-args ["-o" "o" "-p" "p" "-m" "asdf" "some" "command"])
 
   )
 
-(defn run [run-id org repo-pattern command]
+(defn run [run-id org repo-pattern message command]
   (let [repos (filter-repos (get-repos org) repo-pattern)]
     (println repos)))
 
@@ -145,7 +147,9 @@
   (run (gen-id) "pb-" ".*" "rm README.md"))
 
 (defn -main [& args]
-  (let [{:keys [action options exit-message ok?]} (validate-args args)]
+  (let [{:keys [command options exit-message ok?]} (validate-args args)]
     (if exit-message
       (exit (if ok? 0 1) exit-message)
-      (println options))))
+      (let [run-id (gen-id)]
+        (println "Run id" run-id)
+        (run run-id (:org options) (:pattern options) (:message options) command)))))
